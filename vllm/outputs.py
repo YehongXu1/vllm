@@ -97,10 +97,24 @@ class PoolingOutput:
         )
 
 
+@dataclass(frozen=True)
+class ExternalDraftRequest:
+    """Engine-owned ticket for one external candidate round on a live request.
+
+    Pass unchanged to AsyncLLM.submit_external_draft_tokens. The internal request
+    identity is intentionally independent of the caller's reusable request ID.
+    """
+
+    request_id: str
+    generation: int
+
+
 class RequestOutput:
     """The output data of a completion request to the LLM.
 
     Args:
+        external_draft_request: Ticket for the next external candidate round,
+            present only on nonterminal external-speculation output.
         request_id: The unique ID of the request.
         prompt: The prompt string of the request.
                 For encoder/decoder models, this is the
@@ -141,6 +155,7 @@ class RequestOutput:
         *,
         kv_transfer_params: dict[str, Any] | None = None,
         ec_transfer_params: dict[str, Any] | None = None,
+        external_draft_request: ExternalDraftRequest | None = None,
         # Forward compatibility, code that uses args added in new release can
         # still run with older versions of vLLM without breaking.
         **kwargs: Any,
@@ -163,6 +178,7 @@ class RequestOutput:
         self.num_cache_creation_tokens = num_cache_creation_tokens
         self.kv_transfer_params = kv_transfer_params
         self.ec_transfer_params = ec_transfer_params
+        self.external_draft_request = external_draft_request
 
     def add(self, next_output: "RequestOutput", aggregate: bool) -> None:
         """Merge subsequent RequestOutput into this one"""
@@ -170,6 +186,7 @@ class RequestOutput:
         self.finished |= next_output.finished
         self.kv_transfer_params = next_output.kv_transfer_params
         self.ec_transfer_params = next_output.ec_transfer_params
+        self.external_draft_request = next_output.external_draft_request
 
         for next_completion in next_output.outputs:
             for i, completion in enumerate(self.outputs):

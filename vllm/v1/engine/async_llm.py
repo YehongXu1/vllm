@@ -26,7 +26,12 @@ from vllm.inputs import EngineInput, PromptType
 from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
-from vllm.outputs import STREAM_FINISHED, PoolingRequestOutput, RequestOutput
+from vllm.outputs import (
+    STREAM_FINISHED,
+    ExternalDraftRequest,
+    PoolingRequestOutput,
+    RequestOutput,
+)
 from vllm.pooling_params import PoolingParams
 from vllm.renderers import renderer_from_config
 from vllm.renderers.inputs.preprocess import extract_prompt_components
@@ -745,6 +750,19 @@ class AsyncLLM(EngineClient):
                 output_processor.propagate_error(e)
 
         self.output_handler = asyncio.create_task(output_handler())
+
+    async def submit_external_draft_tokens(
+        self, ticket: ExternalDraftRequest, token_ids: list[int]
+    ) -> bool:
+        """Resume one external-speculation request with ready greedy candidates.
+
+        Consume the ticket from generate() output after stop processing. Empty
+        candidates request a target-only step. False means the request ended,
+        was preempted, or this ticket was already consumed; do not retry it.
+        """
+        return await self.engine_core.submit_external_draft_tokens_async(
+            ticket.request_id, ticket.generation, token_ids
+        )
 
     async def abort(
         self, request_id: str | Iterable[str], internal: bool = False

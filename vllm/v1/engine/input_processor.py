@@ -24,7 +24,7 @@ from vllm.multimodal.utils import argsort_mm_positions
 from vllm.platforms import current_platform
 from vllm.pooling_params import PoolingParams
 from vllm.renderers import BaseRenderer, renderer_from_config
-from vllm.sampling_params import SamplingParams
+from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.tasks import GENERATION_TASKS, POOLING_TASKS, SupportedTask
 from vllm.tokenizers import TokenizerLike
 from vllm.utils import length_from_prompt_token_ids_or_embeds, random_uuid
@@ -380,6 +380,24 @@ class InputProcessor:
                         mm_hash=base_mm_hash,
                     )
                 )
+
+        if (
+            self.speculative_config is not None
+            and self.speculative_config.method == "external"
+        ) and (
+            sampling_params is None
+            or sampling_params.temperature != 0
+            or sampling_params.n != 1
+            or sampling_params.output_kind == RequestOutputKind.FINAL_ONLY
+            or sampling_params.structured_outputs is not None
+            or mm_features
+            or prompt_embeds is not None
+            or resumable
+        ):
+            raise VLLMValidationError(
+                "external speculation requires greedy text, n=1, "
+                "non-final-only output, and no structured output or streaming input"
+            )
 
         return EngineCoreRequest(
             request_id=request_id,

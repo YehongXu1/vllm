@@ -14,6 +14,7 @@ from vllm.lora.request import LoRARequest
 from vllm.outputs import (
     STREAM_FINISHED,
     CompletionOutput,
+    ExternalDraftRequest,
     PoolingOutput,
     PoolingRequestOutput,
     RequestOutput,
@@ -686,6 +687,16 @@ class OutputProcessor:
                 kv_transfer_params,
                 ec_transfer_params,
             ):
+                if (
+                    isinstance(request_output, RequestOutput)
+                    and not request_output.finished
+                    and engine_core_output.external_draft_generation is not None
+                ):
+                    # Publish only after detokenization/stop checks. Finished
+                    # requests never authorize another external candidate round.
+                    request_output.external_draft_request = ExternalDraftRequest(
+                        req_id, engine_core_output.external_draft_generation
+                    )
                 if req_state.streaming_input:
                     request_output.finished = False
 

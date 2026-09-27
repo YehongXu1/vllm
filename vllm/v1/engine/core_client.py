@@ -268,6 +268,12 @@ class EngineCoreClient(ABC):
     async def abort_requests_async(self, request_ids: list[str]) -> None:
         raise NotImplementedError
 
+    async def submit_external_draft_tokens_async(
+        self, request_id: str, generation: int, token_ids: list[int]
+    ) -> bool:
+        """Submit a ready candidate round, returning False for an obsolete ticket."""
+        raise NotImplementedError
+
     async def add_lora_async(self, lora_request: LoRARequest) -> bool:
         raise NotImplementedError
 
@@ -1124,6 +1130,14 @@ class AsyncMPClient(MPClient):
         # until it's finished sending them (there is a ref chain from the underlying
         # memoryview back to the original owning tensor/ndarray).
         return self.input_socket.send_multipart((engine,) + message, copy=False)
+
+    async def submit_external_draft_tokens_async(
+        self, request_id: str, generation: int, token_ids: list[int]
+    ) -> bool:
+        """Wake the owning EngineCore through its existing utility request queue."""
+        return await self.call_utility_async(
+            "submit_external_draft_tokens", request_id, generation, token_ids
+        )
 
     async def call_utility_async(self, method: str, *args) -> Any:
         return await self._call_utility_async(method, *args, engine=self.core_engine)

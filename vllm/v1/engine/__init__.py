@@ -218,6 +218,8 @@ class EngineCoreOutput(
     mm_cache_miss_hashes: list[str] | None = None
 
     new_sampling_mask: SamplingMaskLists | None = None
+    # Ticket for the next external candidate round; absent on terminal outputs.
+    external_draft_generation: int | None = None
 
     @property
     def finished(self) -> bool:

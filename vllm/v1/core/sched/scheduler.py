@@ -79,6 +79,10 @@ class Scheduler(SchedulerInterface):
         log_stats: bool = False,
     ) -> None:
         self.vllm_config = vllm_config
+        self.external_speculation = (
+            vllm_config.speculative_config is not None
+            and vllm_config.speculative_config.method == "external"
+        )
         self.scheduler_config = vllm_config.scheduler_config
         self.cache_config = vllm_config.cache_config
         self.lora_config = vllm_config.lora_config
@@ -524,6 +528,9 @@ class Scheduler(SchedulerInterface):
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
             request = self.running[req_index]
+            if request.waiting_for_external_draft:
+                req_index += 1
+                continue
             if input_budget <= draft_slots:
                 break
 
@@ -1353,6 +1360,8 @@ class Scheduler(SchedulerInterface):
         self.encoder_cache_manager.free(request)
         self._inflight_prefills.discard(request)
         request.status = RequestStatus.PREEMPTED
+        request.waiting_for_external_draft = False
+        request.external_draft_generation += 1
         request.num_computed_tokens = 0
         if request.spec_token_ids:
             request.spec_token_ids = []
@@ -1958,6 +1967,10 @@ class Scheduler(SchedulerInterface):
                         # Normal decode / re-prefill: token(s) at the END.
                         routed_experts = routing_data[end - len(new_token_ids) : end]
 
+            if self.external_speculation and new_token_ids and not stopped:
+                request.external_draft_generation += 1
+                request.waiting_for_external_draft = True
+
             should_emit_output = bool(
                 new_token_ids or pooler_output is not None or stopped
             )
@@ -2008,6 +2021,11 @@ class Scheduler(SchedulerInterface):
                     EngineCoreOutput(
                         request_id=req_id,
                         new_token_ids=new_token_ids,
+                        external_draft_generation=(
+                            request.external_draft_generation
+                            if request.waiting_for_external_draft and not stopped
+                            else None
+                        ),
                         finish_reason=finish_reason,
                         new_logprobs=new_logprobs,
                         new_sampling_mask=new_sampling_mask,
@@ -2297,6 +2315,48 @@ class Scheduler(SchedulerInterface):
     def get_kv_cache_usage(self) -> float:
         """Returns the fraction of the KV cache currently in use (0.0-1.0)."""
         return self.kv_cache_manager.usage
+
+    def submit_external_draft_tokens(
+        self, request_id: str, generation: int, token_ids: list[int]
+    ) -> bool:
+        """Admit one ready candidate round; return False for stale/closed tickets.
+
+        EngineCore calls this on its owning loop. Empty candidates explicitly
+        request one target-only step. No remote computation runs in this method.
+        """
+        if not self.external_speculation:
+            raise ValueError("external speculation is not enabled")
+        request = self.requests.get(request_id)
+        if (
+            request is None
+            or request.is_finished()
+            or not request.waiting_for_external_draft
+            or generation != request.external_draft_generation
+        ):
+            return False
+        spec = self.vllm_config.speculative_config
+        assert spec is not None
+        if len(token_ids) > spec.num_speculative_tokens:
+            raise ValueError("candidate length exceeds num_speculative_tokens")
+        vocab_size = self.vllm_config.model_config.get_vocab_size()
+        if any(
+            type(token) is not int or not 0 <= token < vocab_size for token in token_ids
+        ):
+            raise ValueError("external candidates must be target vocabulary token IDs")
+        request.spec_token_ids = list(token_ids)
+        request.waiting_for_external_draft = False
+        return True
+
+    def has_schedulable_requests(self) -> bool:
+        """Keep external waiters live without stepping an otherwise idle engine."""
+        if not self.external_speculation:
+            return self.has_requests()
+        return bool(
+            self.waiting
+            or self.skipped_waiting
+            or self.has_finished_requests()
+            or any(not request.waiting_for_external_draft for request in self.running)
+        )
 
     def add_request(self, request: Request) -> None:
         existing = self.requests.get(request.request_id)

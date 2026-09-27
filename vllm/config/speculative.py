@@ -73,6 +73,7 @@ SpeculativeMethod = Literal[
     "draft_model",
     "suffix",
     "custom_class",
+    "external",
     EagleModelTypes,
     NgramGPUTypes,
     DSparkModelTypes,
@@ -737,6 +738,21 @@ class SpeculativeConfig:
         # will be detected automatically if possible. If the speculative method
         # can not be detected, it will be considered as the "draft_model" by
         # default.
+
+        if self.method == "external":
+            # External candidates are supplied by the engine client. No local
+            # draft model, fake model identity, or proposer instance is needed.
+            if self.model is not None:
+                raise ValueError("external speculation does not load a draft model")
+            if self.draft_sample_method != "greedy":
+                raise ValueError(
+                    "external speculation currently requires greedy drafts"
+                )
+            if self.rejection_sample_method != "standard":
+                raise ValueError("external speculation requires standard verification")
+            if self.enable_adaptive_verification or self.parallel_drafting:
+                raise ValueError("external speculation requires linear candidates")
+            return self
 
         # infer method from user args
         if self.method is None and SpeculativeConfig._is_custom_proposer_path(
@@ -1512,6 +1528,7 @@ class SpeculativeConfig:
                 "suffix",
                 "extract_hidden_states",
                 "custom_class",
+                "external",
             )
             else self.draft_model_config.model
         )

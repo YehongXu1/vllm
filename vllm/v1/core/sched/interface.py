@@ -195,6 +195,16 @@ class SchedulerInterface(ABC):
         not yet returned in SchedulerOutputs."""
         return self.has_unfinished_requests() or self.has_finished_requests()
 
+    def has_schedulable_requests(self) -> bool:
+        """Whether EngineCore should step, excluding externally waiting requests."""
+        return self.has_requests()
+
+    def submit_external_draft_tokens(
+        self, request_id: str, generation: int, token_ids: list[int]
+    ) -> bool:
+        """Accept ready external candidates; unsupported schedulers reject the call."""
+        raise NotImplementedError("external speculation is not supported")
+
     @property
     @abstractmethod
     def pause_state(self) -> PauseState:

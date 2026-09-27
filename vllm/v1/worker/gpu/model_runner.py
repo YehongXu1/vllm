@@ -231,10 +231,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Speculative decoding.
         self.speculator = None
+        self.external_speculation = (
+            self.speculative_config is not None
+            and self.speculative_config.method == "external"
+        )
         self.use_aux_hidden_state_outputs = False
         self.num_speculative_steps = vllm_config.num_speculative_tokens
         if self.speculative_config is not None:
-            if self.is_last_pp_rank:
+            if self.is_last_pp_rank and not self.external_speculation:
                 self.speculator = init_speculator(self.vllm_config, self.device)
 
             if self.speculative_config.method in ("eagle3", "dflash", "dspark"):
@@ -1208,6 +1212,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Some input token ids are directly read from the last sampled tokens
         # and draft tokens. Also, get the logits indices to sample tokens from.
+        if self.external_speculation:
+            # Resolve slots only after request updates, never by arrival order.
+            for req_id, tokens in draft_tokens.items():
+                slot = self.req_states.req_id_to_index[req_id]
+                self.req_states.draft_tokens[slot, : len(tokens)] = torch.tensor(
+                    tokens, dtype=self.req_states.draft_tokens.dtype, device=self.device
+                )
+
         logits_indices = combine_sampled_and_draft_tokens(
             self.input_buffers.input_ids,
             idx_mapping,
@@ -1335,12 +1347,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         else:
             # Rejection sampling for spec decoding.
             assert self.rejection_sampler is not None
-            assert self.speculator is not None
+            assert self.speculator is not None or self.external_speculation
             sampler_output = self.rejection_sampler(
                 logits,
                 input_batch,
                 # Draft logits are needed for probabilistic rejection sampling.
-                self.speculator.draft_logits,
+                self.speculator.draft_logits if self.speculator is not None else None,
             )
 
         return sampler_output, sampler_output.num_sampled, sampler_output.num_rejected
@@ -1809,7 +1821,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     self.speculator.draft_token_confidence_probs, input_batch
                 )
 
-        if self.num_speculative_steps > 0:
+        if self.num_speculative_steps > 0 and not self.external_speculation:
             # Spec-decode and diffusion LLMs both use draft tokens but the latter does
             # not have a speculator (i.e. self.speculator is None)
             self.draft_tokens_handler.set_draft_tokens(

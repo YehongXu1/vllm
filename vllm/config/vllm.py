@@ -1597,6 +1597,33 @@ class VllmConfig:
         self._resolve_mm_processor_device()
         self._validate_mm_processor_device()
 
+        if (
+            self.speculative_config is not None
+            and self.speculative_config.method == "external"
+        ):
+            if not self.use_v2_model_runner:
+                raise ValueError("external speculation requires the V2 model runner")
+            if self.scheduler_config.async_scheduling:
+                raise ValueError("external speculation requires async_scheduling=False")
+            if (
+                self.parallel_config.world_size != 1
+                or self.parallel_config.data_parallel_size != 1
+            ):
+                raise ValueError("external speculation currently requires one worker")
+            if (
+                self.kv_transfer_config is not None
+                or self.ec_transfer_config is not None
+            ):
+                raise ValueError(
+                    "external speculation does not yet support KV/EC transfer"
+                )
+            if self.scheduler_config.stream_interval != 1:
+                raise ValueError("external speculation requires stream_interval=1")
+            if not self.model_config.enforce_eager:
+                raise ValueError(
+                    "external speculation currently requires enforce_eager=True"
+                )
+
         if self.use_v2_model_runner:
             self._validate_v2_model_runner()
         elif self.parallel_config.prefill_context_parallel_size > 1:
@@ -2404,6 +2431,7 @@ class VllmConfig:
                 "mtp",
                 "dflash",
                 "dspark",
+                "external",
             ):
                 unsupported.append(f"speculative method '{speculative_config.method}'")
 

@@ -169,8 +169,8 @@ class EngineCore:
         )
         self.use_spec_decode = vllm_config.speculative_config is not None
         self.check_for_draft_tokens = (
-            self.use_spec_decode or vllm_config.model_config.is_diffusion
-        )
+            self.use_spec_decode and vllm_config.speculative_config.method != "external"
+        ) or vllm_config.model_config.is_diffusion
         if self.scheduler.connector is not None:  # type: ignore
             self.model_executor.init_kv_output_aggregator(self.scheduler.connector)  # type: ignore
 
@@ -478,6 +478,19 @@ class EngineCore:
             # Immediately abort so the connector's request_finished hook runs
             # to free any pre-admission KV-transfer resources.
             self.abort_requests([request.request_id])
+
+    def submit_external_draft_tokens(
+        self, request_id: str, generation: int, token_ids: list[int]
+    ) -> bool:
+        """Submit one ready round through the existing client utility/input queue.
+
+        Returns False when the ticket was invalidated or the request ended.
+        Candidate producers must wait for output stop handling before submitting
+        the next round; this method performs no remote wait or model execution.
+        """
+        return self.scheduler.submit_external_draft_tokens(
+            request_id, generation, token_ids
+        )
 
     def abort_requests(self, request_ids: list[str]):
         """Abort requests from the scheduler."""
@@ -1361,7 +1374,7 @@ class EngineCoreProc(EngineCore):
         """Returns true if the engine should be stepped."""
         return (
             self.engines_running
-            or self.scheduler.has_requests()
+            or self.scheduler.has_schedulable_requests()
             or bool(self.batch_queue)
         )
 

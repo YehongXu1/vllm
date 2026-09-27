@@ -170,6 +170,10 @@ class Request:
         # deferred block freeing (see Scheduler._free_request_blocks).
         self.last_sched_seq = 0
 
+        # The scheduler owns the ticket for a single external candidate round.
+        # Incrementing on output and preemption invalidates late submissions.
+        self.external_draft_generation = 0
+        self.waiting_for_external_draft = False
         self.spec_token_ids: list[int] = []
         self.num_computed_tokens = 0
         self.cache_salt: str | None = cache_salt
