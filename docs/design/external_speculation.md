@@ -5,7 +5,7 @@ SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 # External candidates in Model Runner V2
 
-This experimental engine mode accepts ready greedy candidates from an async
+This experimental engine mode accepts ready candidates from an async
 engine client. It does not load or contact a Draft model. Candidate generation,
 role placement and network transport belong to the caller. No remote wait occurs
 inside the Model Runner.
@@ -15,9 +15,12 @@ inside the Model Runner.
 Configure `speculative_config={"method": "external", "num_speculative_tokens": 3}`
 with Model Runner V2, `enforce_eager=True`, `async_scheduling=False`, one worker,
 and `stream_interval=1`. This implementation supports text generation with
-`temperature=0`, `n=1`, and cumulative or delta output. Structured output,
-streaming input, multimodal input, KV/EC transfer, CUDA graphs, distributed
-execution, stochastic proposals and asynchronous local scheduling are not enabled.
+`n=1` and cumulative or delta output. Token-only candidates require
+`temperature=0`. For stochastic sampling, set `draft_sample_method="probabilistic"`
+and install Worker-owned `ExternalSpeculationIO` to supply the actual proposal
+distributions before admitting candidates. Structured output, streaming input,
+multimodal input, KV/EC transfer, CUDA graphs, distributed execution and
+asynchronous local scheduling are not enabled.
 The ordinary local-speculation path is unchanged.
 
 Disabling asynchronous *local scheduling* does not make the engine wait for a
@@ -53,7 +56,7 @@ or Draft fallback is introduced.
 
 The first prefill produces a normal Target token. The client uses that confirmed
 prefix to prepare a Draft round. Subsequent admitted candidates use the existing
-MRV2 greedy rejection sampler. A scheduler budget or output limit can truncate a
+MRV2 rejection sampler. A scheduler budget or output limit can truncate a
 round; synchronize Draft against the actual emitted token delta, not the number
 of candidates submitted. The client owns how its Draft cache is aligned.
 
@@ -87,11 +90,18 @@ or model/tokenizer compatibility negotiation is included. There are no Foretoken
 imports or Mooncake-specific fields in vLLM.
 
 Deterministic proposals need only token IDs: the existing verifier treats their
-proposal distribution as a point mass. A later stochastic-proposal extension must
-carry the actual distribution and integrate Worker-owned device materialization;
-a token-list API cannot silently claim that support. The current path does not
-provide general transport callbacks, and large tensor readiness is not inferred
-from control-message arrival.
+proposal distribution as a point mass. `GPUModelRunner.set_external_speculation_io`
+installs a Worker-owned device interface for stochastic proposals. The Draft
+sampler can expose full processed logits through `SamplerOutput.processed_logits`;
+`on_sample` receives these together with the actual sampled token IDs.
+
+The Target's `draft_logits` callback returns already-materialized logits indexed
+by persistent request slot and candidate position. The native verifier divides
+these by Target temperature, so an implementation transporting `log(q)` returns
+`temperature * log(q)`. Scheduled generation IDs distinguish successive rounds
+on the same request. Callbacks execute on the Runner thread and must not wait for
+network traffic. The caller owns transport, readiness before admission, and GPU
+completion fences before releasing proposal storage.
 
 Validation must distinguish engine semantics from full DT service behavior:
 exercise full/partial acceptance, rejection, length/stop handling, interleaved
