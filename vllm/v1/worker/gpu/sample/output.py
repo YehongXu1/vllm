@@ -20,6 +20,8 @@ class SamplerOutput:
     num_sampled: torch.Tensor | None
     num_rejected: torch.Tensor | None = None
     sampling_mask_tensors: SamplingMaskTensors | None = None
+    # Actual post-temperature/truncation logits, retained only for a device observer.
+    processed_logits: torch.Tensor | None = None
 
 
 @triton.jit

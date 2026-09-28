@@ -383,7 +383,13 @@ def warmup_kernels(
                 req_computed[i] += decode_query_len if use_spec else 1
 
         all_indices = list(range(num_reqs))
-        use_spec_decode = num_spec_steps > 0
+        # External IO is installed by the Worker after engine initialization.
+        # Startup has no external proposals; warm ordinary decoding here and
+        # compile verification kernels on the first admitted external batch.
+        use_spec_decode = num_spec_steps > 0 and not (
+            model_runner.external_speculation
+            and model_runner.speculative_config.draft_sample_method == "probabilistic"
+        )
 
         # Decode steps to warm, as (request indices, per-request spec flag).
         # Under spec decoding the scheduler drops requests the drafter proposed

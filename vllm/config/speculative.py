@@ -744,10 +744,6 @@ class SpeculativeConfig:
             # draft model, fake model identity, or proposer instance is needed.
             if self.model is not None:
                 raise ValueError("external speculation does not load a draft model")
-            if self.draft_sample_method != "greedy":
-                raise ValueError(
-                    "external speculation currently requires greedy drafts"
-                )
             if self.rejection_sample_method != "standard":
                 raise ValueError("external speculation requires standard verification")
             if self.enable_adaptive_verification or self.parallel_drafting:

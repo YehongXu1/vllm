@@ -112,6 +112,9 @@ class InputBatch:
     # stays valid for every replay the graph serves.
     max_query_len: int | None = None
 
+    # External proposal buffers must match the scheduled generation, not just req_id.
+    external_draft_generations: dict[str, int] | None = None
+
     @classmethod
     def make_dummy(
         cls,

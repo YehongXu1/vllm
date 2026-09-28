@@ -81,6 +81,8 @@ class Sampler:
         self,
         logits: torch.Tensor,
         input_batch: InputBatch,
+        *,
+        return_processed_logits: bool = False,
     ) -> SamplerOutput:
         expanded_idx_mapping = input_batch.expanded_idx_mapping
         idx_mapping = input_batch.idx_mapping
@@ -109,6 +111,7 @@ class Sampler:
             input_ids,
             expanded_local_pos,
             return_logprobs=return_logprobs,
+            return_processed_logits=return_processed_logits,
         )
 
         if return_logprobs:
@@ -158,6 +161,7 @@ class Sampler:
             num_sampled=num_sampled,
             num_rejected=num_rejected,
             sampling_mask_tensors=sampling_mask_tensors,
+            processed_logits=processed_logits if return_processed_logits else None,
         )
         return sampler_output
 
@@ -256,6 +260,7 @@ class Sampler:
         input_ids: torch.Tensor,
         expanded_local_pos: torch.Tensor,
         return_logprobs: bool = False,
+        return_processed_logits: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         processed_logits = self.apply_sampling_params(
             logits,
@@ -275,6 +280,7 @@ class Sampler:
             # any greedy requests or per-request seeds, or if post-processed
             # logprobs need to be returned for any requests.
             (top_k is None and top_p is None)
+            or return_processed_logits
             or (return_logprobs and self.logprobs_mode in PROCESSED_LOGPROBS_MODES)
             or self.sampling_states.any_greedy(idx_mapping_np)
             or self.sampling_states.any_explicit_seed(idx_mapping_np)

@@ -264,6 +264,9 @@ class SchedulerOutput:
     # tail (mamba "align" CoW target). None unless partial hash hits are active.
     partial_tail_offloads: dict[str, list[tuple[int, int, int]]] | None = None
 
+    # Generation identity for externally staged proposal tensors in this step.
+    external_draft_generations: dict[str, int] | None = None
+
     # Dynamic speculative decoding: optimal K chosen by scheduler.
     # Number of spec tokens to schedule for the next step.
     num_spec_tokens_to_schedule: int = 0

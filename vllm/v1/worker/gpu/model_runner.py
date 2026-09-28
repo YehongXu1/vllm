@@ -135,6 +135,7 @@ from vllm.v1.worker.gpu.spec_decode.adaptive_verification import (
 from vllm.v1.worker.gpu.spec_decode.eagle.eagle3_utils import (
     set_eagle3_aux_hidden_state_layers,
 )
+from vllm.v1.worker.gpu.spec_decode.external import ExternalSpeculationIO
 from vllm.v1.worker.gpu.spec_decode.rejection_sampler import (
     RejectionSampler,
     get_max_chunk_logits,
@@ -156,6 +157,7 @@ logger = init_logger(__name__)
 class GPUModelRunner(LoRAModelRunnerMixin):
     def __init__(self, vllm_config: VllmConfig, device: torch.device):
         self.vllm_config = vllm_config
+        self.external_speculation_io: ExternalSpeculationIO | None = None
         self.model_config = vllm_config.model_config
         self.cache_config = vllm_config.cache_config
         self.compilation_config = vllm_config.compilation_config
@@ -898,6 +900,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
     def _remove_request(self, req_id: str) -> bool:
         # Call model_state.remove_request *before* req_states.remove_request
         # so the model_state can still look up the slot index.
+        if self.external_speculation_io is not None:
+            self.external_speculation_io.remove_request(req_id)
         self.model_state.remove_request(req_id)
         req_idx = self.req_states.remove_request(req_id)
         if req_idx is None:
@@ -981,6 +985,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
             if self.is_last_pp_rank and new_req_data.sampling_params is not None:
                 assert self.sampler is not None
+                if self.external_speculation_io is not None:
+                    self.external_speculation_io.add_request(
+                        req_id, new_req_data.sampling_params
+                    )
                 self.sampler.add_request(
                     req_index, prompt_len, new_req_data.sampling_params
                 )
@@ -1284,6 +1292,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             cu_num_logits=cu_num_logits,
             cu_num_logits_np=cu_num_logits_np,
             has_structured_output_reqs=scheduler_output.has_structured_output_requests,
+            external_draft_generations=scheduler_output.external_draft_generations,
             prompt_lens=prompt_lens,
             max_query_len=(
                 int(num_scheduled_tokens_upper_bound.max())
@@ -1323,6 +1332,26 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         )
         return block_tables, slot_mappings
 
+    def set_external_speculation_io(self, io: ExternalSpeculationIO) -> None:
+        """Install Worker-owned device IO before accepting requests.
+
+        This boundary supports one eager MRV2 worker and the standard sampler.
+        No transport implementation or role-placement policy lives in vLLM.
+        """
+        if self.external_speculation_io is not None:
+            raise RuntimeError("external speculation IO is already installed")
+        if (
+            not self.model_config.enforce_eager
+            or self.scheduler_config.async_scheduling
+            or self.parallel_config.world_size != 1
+            or self.parallel_config.data_parallel_size != 1
+            or type(self.sampler) is not Sampler
+        ):
+            raise ValueError(
+                "external IO requires one eager synchronous standard sampler"
+            )
+        self.external_speculation_io = io
+
     def sample(
         self,
         hidden_states: torch.Tensor,
@@ -1343,18 +1372,38 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         if input_batch.num_draft_tokens == 0 or self.rejection_sampler is None:
             assert self.sampler is not None
-            sampler_output = self.sampler(logits, input_batch)
+            if self.external_speculation_io is None:
+                sampler_output = self.sampler(logits, input_batch)
+            else:
+                sampler_output = self.sampler(
+                    logits,
+                    input_batch,
+                    return_processed_logits=self.external_speculation_io.capture_proposals,
+                )
         else:
             # Rejection sampling for spec decoding.
             assert self.rejection_sampler is not None
             assert self.speculator is not None or self.external_speculation
-            sampler_output = self.rejection_sampler(
-                logits,
-                input_batch,
-                # Draft logits are needed for probabilistic rejection sampling.
-                self.speculator.draft_logits if self.speculator is not None else None,
+            draft_logits = (
+                self.speculator.draft_logits if self.speculator is not None else None
             )
+            if (
+                self.external_speculation
+                and self.speculative_config.draft_sample_method == "probabilistic"
+            ):
+                if self.external_speculation_io is None:
+                    raise RuntimeError(
+                        "external proposal distributions have no device IO"
+                    )
+                draft_logits = self.external_speculation_io.draft_logits(
+                    input_batch, self.sampler.sampling_states.temperature.gpu
+                )
+                if draft_logits is None:
+                    raise RuntimeError("external proposal distributions are not ready")
+            sampler_output = self.rejection_sampler(logits, input_batch, draft_logits)
 
+        if self.external_speculation_io is not None:
+            self.external_speculation_io.on_sample(input_batch, sampler_output)
         return sampler_output, sampler_output.num_sampled, sampler_output.num_rejected
 
     def postprocess_sampled(

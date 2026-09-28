@@ -386,7 +386,10 @@ class InputProcessor:
             and self.speculative_config.method == "external"
         ) and (
             sampling_params is None
-            or sampling_params.temperature != 0
+            or (
+                sampling_params.temperature != 0
+                and self.speculative_config.draft_sample_method != "probabilistic"
+            )
             or sampling_params.n != 1
             or sampling_params.output_kind == RequestOutputKind.FINAL_ONLY
             or sampling_params.structured_outputs is not None
@@ -395,7 +398,7 @@ class InputProcessor:
             or resumable
         ):
             raise VLLMValidationError(
-                "external speculation requires greedy text, n=1, "
+                "external speculation requires text, n=1, "
                 "non-final-only output, and no structured output or streaming input"
             )
 

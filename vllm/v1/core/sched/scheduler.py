@@ -1280,6 +1280,14 @@ class Scheduler(SchedulerInterface):
             num_scheduled_tokens=num_scheduled_tokens,
             total_num_scheduled_tokens=total_num_scheduled_tokens,
             scheduled_spec_decode_tokens=scheduled_spec_decode_tokens,
+            external_draft_generations=(
+                {
+                    req_id: self.requests[req_id].external_draft_generation
+                    for req_id in scheduled_spec_decode_tokens
+                }
+                if self.external_speculation
+                else None
+            ),
             scheduled_encoder_inputs=scheduled_encoder_inputs,
             scheduled_encoder_input_stats=scheduled_encoder_input_stats,
             num_common_prefix_blocks=num_common_prefix_blocks,
